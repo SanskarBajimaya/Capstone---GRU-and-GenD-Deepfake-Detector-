@@ -168,3 +168,16 @@ We manage links to files using `src/utils/files.py`.
     pages        = {773--783}
 }
 ```
+
+## Original Implementation
+
+This project is based on the GenD implementation from:
+
+Yermakov et al., "Deepfake Detection that Generalizes Across Benchmarks"
+
+Original repository:
+https://github.com/yermandy/GenD
+
+The original implementation is used as the baseline for our capstone research.
+Our work extends the architecture by investigating temporal modeling approaches,
+including GRU-based video-level representations.
