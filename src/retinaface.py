@@ -1,5 +1,4 @@
 import os
-import subprocess
 
 import cv2
 import numpy as np
@@ -65,8 +64,9 @@ class RetinaFace:
             sess_options = onnxruntime.SessionOptions()
             sess_options.intra_op_num_threads = int(os.environ.get("OMP_NUM_THREADS", 1))
             sess_options.inter_op_num_threads = int(os.environ.get("OMP_NUM_THREADS", 1))
-            self.session = onnxruntime.InferenceSession(self.model_file, sess_options)
-            self.session.set_providers(providers)
+            self.session = onnxruntime.InferenceSession(
+                self.model_file, sess_options, providers=providers
+            )
         self.center_cache = {}
         self.nms_thresh = 0.4
         self.det_thresh = 0.5
@@ -277,11 +277,7 @@ class RetinaFace:
 
 
 def cuda_available():
-    try:
-        subprocess.check_output(["nvidia-smi"], stderr=subprocess.STDOUT)
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
+    return "CUDAExecutionProvider" in onnxruntime.get_available_providers()
 
 
 def prepare_model(det_thres=0.5, nms_thresh=0.4) -> RetinaFace:
@@ -293,12 +289,23 @@ def prepare_model(det_thres=0.5, nms_thresh=0.4) -> RetinaFace:
             "wget https://huggingface.co/datasets/theanhntp/Liblib/resolve/ae4357741af379482690fe3e0f2fa6fd32ba33b4/insightface/models/buffalo_l/det_10g.onnx -O weights/models/buffalo_l/det_10g.onnx"
         )
 
+    # Share the compatible CUDA/cuDNN DLLs bundled with PyTorch on Windows.
+    if cuda_available() and hasattr(onnxruntime, "preload_dlls"):
+        try:
+            onnxruntime.preload_dlls()
+        except (ImportError, OSError, RuntimeError) as exc:
+            print(f"CUDA DLL preload failed; CPU fallback remains available: {exc}")
+
     if cuda_available():
         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
     else:
         providers = ["CPUExecutionProvider"]
 
     model = RetinaFace(model_file, providers=providers)
+    actual_provider = model.session.get_providers()[0]
+    print("RetinaFace provider:", actual_provider)
+    if "CUDAExecutionProvider" in providers and actual_provider != "CUDAExecutionProvider":
+        print("RetinaFace CUDA initialization failed; using CPU fallback.")
 
     model.prepare(
         ctx_id=0,
