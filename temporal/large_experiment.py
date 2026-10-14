@@ -42,8 +42,12 @@ def seed_run(seed):
     torch.use_deterministic_algorithms(True)
 
 
-def preflight(manifest):
+def preflight(manifest, split=None, names=None):
+    groups = (set().union(*(split['groups'][name] for name in names))
+              if names is not None else None)
     for record in manifest['videos']:
+        if groups is not None and record['group_id'] not in groups:
+            continue
         load_master(master_path(FEATURE_ROOT, record), record)
 
 
@@ -54,7 +58,7 @@ def loader(manifest, split, name, length, seed=0, shuffle=False):
                       shuffle=shuffle, generator=torch.Generator().manual_seed(seed), num_workers=0)
 
 
-def evaluate(loader, device, model=None):
+def evaluate(loader, device, model=None, prediction_rows=None, context=None):
     labels, probabilities = [], []
     if model is not None:
         model.eval()
@@ -64,6 +68,14 @@ def evaluate(loader, device, model=None):
                  else model(batch['features'].to(device)).sigmoid().cpu())
             labels.extend(batch['label'].tolist())
             probabilities.extend(p.tolist())
+            if prediction_rows is not None:
+                for i, probability in enumerate(p.tolist()):
+                    label = int(batch['label'][i])
+                    predicted = int(probability >= 0.5)
+                    prediction_rows.append(dict(video_id=batch['video_id'][i],
+                                                group_id=batch['group_id'][i], true_label=label,
+                                                **context, fake_probability=probability,
+                                                predicted_label=predicted, correct=predicted == label))
     return metrics(labels, probabilities)
 
 

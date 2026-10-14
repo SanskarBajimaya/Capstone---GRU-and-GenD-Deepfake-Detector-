@@ -1,5 +1,6 @@
 """Run one specified controlled GRU training seed; never builds a test loader."""
 import argparse
+import time
 from temporal.large_experiment import *
 
 
@@ -8,11 +9,12 @@ def main():
     parser.add_argument('--sequence-length', type=int, choices=(32, 64), required=True)
     parser.add_argument('--seed', type=int, choices=TRAIN_SEEDS, required=True)
     args = parser.parse_args()
+    started = time.perf_counter()
     path = checkpoint_path(args.sequence_length, args.seed)
     if path.exists():
         raise ValueError(f'{path} already exists; preserve or explicitly archive it before rerunning')
     manifest, split = load_definitions()
-    preflight(manifest)
+    preflight(manifest, split, ('train', 'validation'))
     seed_run(args.seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     train = loader(manifest, split, 'train', args.sequence_length, args.seed, True)
@@ -52,7 +54,15 @@ def main():
         print(f'Epoch {epoch}/20 validation: {val_metrics}', flush=True)
         write_csv(RESULT_ROOT / f'gru{args.sequence_length}_seed{args.seed}_epochs.csv', rows)
     cp['completed'] = True
+    cp['training_seconds'] = time.perf_counter() - started
     torch.save(cp, path)
+    write_csv(RESULT_ROOT / f'gru{args.sequence_length}_seed{args.seed}_run.csv',
+              [dict(model='GRU', sequence_length=args.sequence_length,
+                    training_seed=args.seed, split_seed=SPLIT_SEED,
+                    checkpoint_path=str(path), best_epoch=cp['best_epoch'],
+                    best_val_auroc=cp['best_val_auroc'], best_val_bce=cp['best_val_bce'],
+                    best_val_accuracy=cp['best_val_accuracy'],
+                    training_seconds=cp['training_seconds'])])
 
 
 if __name__ == '__main__':

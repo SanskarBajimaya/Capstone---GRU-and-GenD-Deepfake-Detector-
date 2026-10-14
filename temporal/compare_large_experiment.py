@@ -31,10 +31,15 @@ def main():
     if args.test and not decision_path.is_file():
         raise ValueError('Run validation comparison first to save configuration selection before TEST')
     manifest, split = load_definitions()
-    preflight(manifest)
+    preflight(manifest, split, ('validation', 'test') if args.test else ('validation',))
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     checkpoints = {(length, seed): load_checkpoint(length, seed, manifest, split, device)
                    for length in (32, 64) for seed in TRAIN_SEEDS}
+    predictions = []
+    if args.test:
+        from temporal.test_reporting import verify_test_integrity, save_test_report
+        integrity = verify_test_integrity(manifest, split, checkpoints,
+                                         json.loads(decision_path.read_text(encoding='utf-8')))
     rows = []
     for name in (('validation', 'test') if args.test else ('validation',)):
         if name == 'test':
@@ -45,10 +50,14 @@ def main():
         for length in (32, 64):
             data = loader(manifest, split, name, length)
             split_rows.append(dict(model='GenD', sequence_length=length, training_seed='',
-                                   split_seed=SPLIT_SEED, split=name, epoch='', **evaluate(data, device)))
+                                   split_seed=SPLIT_SEED, split=name, epoch='',
+                                   **evaluate(data, device, prediction_rows=predictions if name == 'test' else None,
+                                              context=dict(model='GenD', sequence_length=length, seed=''))))
             for seed in TRAIN_SEEDS:
                 cp, model = checkpoints[length, seed]
-                values = evaluate(data, device, model)
+                values = evaluate(data, device, model,
+                                  prediction_rows=predictions if name == 'test' else None,
+                                  context=dict(model='GRU', sequence_length=length, seed=seed))
                 if name == 'validation' and not np.isclose(values['auroc'], cp['best_val_auroc'], atol=1e-8):
                     raise ValueError('Validation AUROC no longer reproduces checkpoint')
                 split_rows.append(dict(model='GRU', sequence_length=length, training_seed=seed,
@@ -71,15 +80,24 @@ def main():
             print('Selected GRU frames:', winner['sequence_length'])
         for row in summary:
             row['selected_gru'] = row['model'] == 'GRU' and row['sequence_length'] == decision['sequence_length']
-        write_csv(RESULT_ROOT / f'{name}_summary.csv', summary)
+        if not (args.test and name == 'validation'):
+            write_csv(RESULT_ROOT / f'{name}_summary.csv', summary)
         rows.extend(split_rows)
     # Preserve validation rows and all per-seed final metrics.
     result_path = RESULT_ROOT / 'experiment_results.csv'
+    if args.test:
+        with result_path.open(newline='', encoding='utf-8') as stream:
+            saved_validation = [r for r in csv.DictReader(stream) if r['split'] == 'validation']
+        if len(saved_validation) != 12:
+            raise ValueError('Expected twelve saved validation rows')
+        rows = saved_validation + [r for r in rows if r['split'] == 'test']
     if not args.test and result_path.exists():
         with result_path.open(newline='', encoding='utf-8') as stream:
             previous_test = [r for r in csv.DictReader(stream) if r['split'] == 'test']
         rows.extend(previous_test)
     write_csv(result_path, rows)
+    if args.test:
+        save_test_report(rows, predictions, summary, integrity, decision)
     print('Split groups:', {k: len(v) for k, v in split['groups'].items()})
     print('GenD results deterministic; GRU standard deviation uses ddof=1 across five seeds.')
 
