@@ -11,6 +11,7 @@ from temporal.video_loader import (
 )
 
 from temporal.extract_features import extract_gend_features
+from temporal.experiment_config import DATA_ROOT
 
 
 # --------------------------------------------------
@@ -21,15 +22,9 @@ SEQUENCE_LENGTH = 16
 
 MODEL_NAME = "yermandy/GenD_CLIP_L_14"
 
-REAL_VIDEO_DIR = Path(
-    "data/faceforensics/"
-    "original_sequences/youtube/c23/videos"
-)
+REAL_VIDEO_DIR = DATA_ROOT / "original_sequences/youtube/c23/videos"
 
-FAKE_VIDEO_DIR = Path(
-    "data/faceforensics/"
-    "manipulated_sequences/Deepfakes/c23/videos"
-)
+FAKE_VIDEO_DIR = DATA_ROOT / "manipulated_sequences/Deepfakes/c23/videos"
 
 OUTPUT_ROOT = Path(
     "temporal/features"

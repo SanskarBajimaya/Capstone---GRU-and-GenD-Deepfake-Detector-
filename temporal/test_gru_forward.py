@@ -1,3 +1,4 @@
+from temporal.experiment_config import DATA_ROOT
 import torch
 
 from detector import prepare_model
@@ -12,10 +13,7 @@ from temporal.extract_features import extract_gend_features
 from temporal.model_a import TemporalGRU
 
 
-VIDEO_PATH = (
-    "data/faceforensics/"
-    "original_sequences/youtube/c23/videos/183.mp4"
-)
+VIDEO_PATH = str(DATA_ROOT / "original_sequences/youtube/c23/videos/183.mp4")
 
 SEQUENCE_LENGTH = 16
 MODEL_NAME = "yermandy/GenD_CLIP_L_14"

@@ -15,6 +15,7 @@ from temporal.dataset_split import create_paired_splits
 from temporal.feature_dataset import TemporalFeatureDataset
 from temporal.model_a import TemporalGRU
 from temporal.video_loader import load_aligned_frame_sequence, preprocess_frame_sequence
+from temporal.experiment_config import DATA_ROOT
 
 ROOT = Path(__file__).resolve().parents[1]
 SEQUENCE_LENGTH = 16
@@ -106,7 +107,7 @@ def main():
         if label != expected_label:
             raise RuntimeError(f"Unexpected label for {video}: {label}")
         subdir = "manipulated_sequences/Deepfakes" if label else "original_sequences/youtube"
-        video_path = ROOT / "data/faceforensics" / subdir / "c23/videos" / f"{video}.mp4"
+        video_path = DATA_ROOT / subdir / "c23/videos" / f"{video}.mp4"
         frames, frame_ids = load_aligned_frame_sequence(
             video_path=str(video_path), face_detector=face_detector, sequence_length=SEQUENCE_LENGTH,
         )

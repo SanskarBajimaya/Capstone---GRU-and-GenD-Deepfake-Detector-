@@ -1,13 +1,11 @@
+from temporal.experiment_config import DATA_ROOT
 import os
 
 from detector import prepare_model
 from temporal.video_loader import load_aligned_frame_sequence
 
 
-VIDEO_PATH = (
-    "data/faceforensics/"
-    "original_sequences/youtube/c23/videos/183.mp4"
-)
+VIDEO_PATH = str(DATA_ROOT / "original_sequences/youtube/c23/videos/183.mp4")
 
 SEQUENCE_LENGTH = 16
 
