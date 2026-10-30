@@ -18,3 +18,7 @@ z.py
 /temporal/features_64/
 /temporal/models/
 *.pt.tmp
+/temporal/features_pe/
+/temporal/models_pe/
+/temporal/features_pe32/
+/temporal/results_pe/*.pt
