@@ -228,7 +228,7 @@ Sources: [`validation_summary.csv`](temporal/results/validation_summary.csv), [`
 
 ![FF++ test AUROC across six configurations](docs/readme-assets/ffpp-test-auroc.png)
 
-*The graph’s vertical axis is zoomed because all six results are close to 1.0.*
+*The horizontal AUROC axis spans 0–1; numeric labels show differences near the ceiling.*
 
 | Model | AUROC ↑ | AP ↑ | EER ↓ |
 |---|---:|---:|---:|
@@ -249,7 +249,7 @@ Sources: [`final_comparison_ffpp.csv`](temporal/results_pe/final_comparison_ffpp
 
 ![External Celeb-DF v2 test AUROC across six configurations](docs/readme-assets/celebdf-test-auroc.png)
 
-*The graph’s vertical axis begins at 0.90 to make the observed differences visible.*
+*The horizontal AUROC axis spans 0–1; the strongest model is outlined and its label is bold.*
 
 | Model | External AUROC ↑ | AP ↑ | EER ↓ | Recall @ 1% FPR ↑ |
 |---|---:|---:|---:|---:|
