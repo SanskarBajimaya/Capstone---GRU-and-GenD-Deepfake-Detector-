@@ -88,7 +88,7 @@ The capstone frontend is a separate implementation under [`frontend/`](frontend/
 
 | Example: REAL-labeled analysis | Example: FAKE-labeled analysis |
 |:--:|:--:|
-| <img src="docs/readme-assets/frontend-real.jpg" width="520" alt="Local Gradio interface showing a video and GenD-CLIP REAL verdict (12.86% fake signal)."/> | <img src="docs/readme-assets/frontend-fake.jpg" width="520" alt="Local Gradio interface showing a video and GenD-CLIP FAKE verdict (82.74% fake signal)."/> |
+| <img src="docs/readme-assets/frontend-real.jpg.jpeg" width="520" alt="Local Gradio interface showing a video and GenD-CLIP REAL verdict (12.86% fake signal)."/> | <img src="docs/readme-assets/frontend-fake.jpg.jpeg" width="520" alt="Local Gradio interface showing a video and GenD-CLIP FAKE verdict (82.74% fake signal)."/> |
 | Screenshot: GenD-CLIP fake signal **12.86%** | Screenshot: GenD-CLIP fake signal **82.74%** |
 
 *These screenshots show local single-video outputs, **not** benchmark metrics or verified ground-truth accuracy. A 50% threshold produces the displayed REAL/FAKE label; the percentage is not a calibrated guarantee.*
