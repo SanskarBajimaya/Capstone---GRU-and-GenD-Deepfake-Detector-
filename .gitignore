@@ -22,3 +22,8 @@ z.py
 # /temporal/models_pe/
 # /temporal/features_pe32/
 /temporal/results_pe/*.pt
+
+# Local secrets and machine-specific environment configuration
+/.env
+/.env.*
+!/.env.example
