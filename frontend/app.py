@@ -23,7 +23,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
-from model_loader import ModelManager
+from model_loader import MODEL_REGISTRY, ModelManager
 from predictor import MODEL_LABELS, AnalysisError, AnalysisReport, PredictionService
 from preprocessing import UploadValidationError, inspect_video
 
@@ -60,7 +60,7 @@ def _hero_html() -> str:
     return f"""
     <section class="hero-shell"><div class="hero-orb orb-one"></div><div class="hero-orb orb-two"></div><div class="hero-grid"></div>
       <div class="hero-content"><div class="eyebrow"><span>{_icon('scan')}</span> MULTI-BACKBONE FORENSIC ANALYSIS</div>
-        <h1>Detect the <span>Difference.</span></h1>
+        <h1>Deepfake Detector</h1>
         <p>Advanced deepfake analysis powered by GenD visual encoders and GRU temporal intelligence.</p>
         <div class="hero-facts"><span>CLIP ViT-L/14</span><i></i><span>Perception Encoder</span><i></i><span>32-frame temporal reasoning</span></div></div>
       <div class="hero-visual"><div class="scanner-ring ring-a"></div><div class="scanner-ring ring-b"></div>
@@ -77,10 +77,15 @@ EMPTY_RESULT = """
 
 def _availability_html() -> str:
     rows = []
-    for key, label in MODEL_LABELS.items():
-        available, reason = MANAGER.availability()[key]
-        state, status = ("ready", "Available") if available else ("blocked", "Weights required")
-        rows.append(f'<div class="availability-row"><span class="availability-state {state}"></span><div><strong>{html.escape(label)}</strong><small>{html.escape(reason)}</small></div><b>{status}</b></div>')
+    for status in MANAGER.model_statuses().values():
+        if status.phase == "ERROR":
+            state, display, detail = "error", "ERROR", status.detail
+        elif status.phase == "UNAVAILABLE" or not status.selectable:
+            state, display, detail = "unavailable", "UNAVAILABLE", status.detail
+        else:
+            state, display = "ready", "READY"
+            detail = status.detail if status.phase == "READY" else "Model available; loads on first use"
+        rows.append(f'<div class="availability-row"><span class="availability-state {state}"></span><div><strong>{html.escape(status.label)}</strong><small>{html.escape(detail)}</small></div><b class="status-phase {state}">{display}</b></div>')
     return '<div class="availability-list">' + "".join(rows) + "</div>"
 
 
@@ -127,54 +132,51 @@ def _chart_frame(report: AnalysisReport | None = None) -> pd.DataFrame:
     return pd.DataFrame({"Model": [p.label for p in report.predictions], "Fake probability (%)": [round(p.fake_probability * 100, 2) for p in report.predictions], "Prediction": ["FAKE" if p.fake_probability >= .5 else "REAL" for p in report.predictions]})
 
 
-def _run_analysis(video_path: str | None, model_key: str, compare_all: bool, progress=gr.Progress()):
+def _run_analysis(video_path: str | None, model_key: str, compare_all: bool):
     if not video_path:
-        return EMPTY_RESULT, _chart_frame(), _status_html("Select an MP4 video before analysis.", "error")
+        return EMPTY_RESULT, _chart_frame(), _status_html("Select an MP4 video before analysis.", "error"), _availability_html()
     try:
-        progress(.02, desc="Validating video container")
         metadata = inspect_video(video_path, MAX_UPLOAD_MB, MAX_DURATION_SECONDS)
-        def update(fraction: float, message: str) -> None:
-            progress(min(max(fraction, .08), .98), desc=message)
-        report = SERVICE.analyze(metadata.path, model_key, compare_all, metadata, update)
-        progress(1, desc="Analysis complete")
+        report = SERVICE.analyze(metadata.path, model_key, compare_all, metadata, lambda _fraction, _message: None)
         count = len(report.predictions)
-        return _result_html(report), _chart_frame(report), _status_html(f"Analysis complete · {count} genuine model result{'s' if count != 1 else ''}", "success")
+        return _result_html(report), _chart_frame(report), _status_html(f"Analysis complete · {count} genuine model result{'s' if count != 1 else ''}", "success"), _availability_html()
     except (UploadValidationError, AnalysisError) as exc:
-        return _error_html("Analysis unavailable", str(exc)), _chart_frame(), _status_html(str(exc), "error")
+        return _error_html("Analysis unavailable", str(exc)), _chart_frame(), _status_html(str(exc), "error"), _availability_html()
     except Exception as exc:
-        return _error_html("Inference failed safely", "The inference service encountered an unexpected local error."), _chart_frame(), _status_html(type(exc).__name__, "error")
+        return _error_html("Inference failed safely", "The inference service encountered an unexpected local error."), _chart_frame(), _status_html(type(exc).__name__, "error"), _availability_html()
 
 
-def run_selected(video_path: str | None, model_key: str, progress=gr.Progress()):
-    return _run_analysis(video_path, model_key, False, progress)
+def run_selected(video_path: str | None, model_key: str):
+    return _run_analysis(video_path, model_key, False)
 
 
-def run_comparison(video_path: str | None, model_key: str, progress=gr.Progress()):
-    return _run_analysis(video_path, model_key, True, progress)
+def run_comparison(video_path: str | None, model_key: str):
+    return _run_analysis(video_path, model_key, True)
 
 
 def _model_cards_html() -> str:
     cards = [
         ("01", "GenD-CLIP", "Spatial foundation", "CLIP ViT-L/14 encodes aligned faces; the released GenD head scores every frame and the video score is their mean."),
         ("02", "GenD-PE", "Generalized visual signal", "Perception Encoder Core-L supplies an independent 1,024-dimensional representation with its released GenD classification head."),
-        ("03", "CLIP-GRU-32", "Temporal sequence", "Five validated GRU seeds read the same 32 chronological CLIP embeddings and their video probabilities are averaged."),
-        ("04", "PE-GRU-32", "Temporal sequence", "The matching five-seed GRU configuration operates on PE embeddings extracted from exactly corresponding aligned frames."),
-        ("05", "Original-head ensemble", "Score fusion", "Mean probability fusion combines genuine GenD-CLIP and GenD-PE video scores without mixing benchmark metrics."),
-        ("06", "Temporal GRU ensemble", "Score fusion", "Mean probability fusion combines the five-seed CLIP-GRU and PE-GRU video-level outputs."),
+        ("03", "GenD CLIP+PE ensemble", "Score fusion", "Mean probability fusion combines genuine GenD-CLIP and GenD-PE video scores without mixing benchmark metrics."),
+        ("04", "CLIP-GRU-32 (seed-probability ensemble)", "Temporal sequence", "Five validated GRU seeds read the same 32 chronological CLIP embeddings and their video probabilities are averaged."),
+        ("05", "PE-GRU-32 (seed-probability ensemble)", "Temporal sequence", "The matching five-seed GRU configuration operates on PE embeddings extracted from exactly corresponding aligned frames."),
+        ("06", "CLIP-GRU+PE-GRU ensemble", "Score fusion", "Mean probability fusion combines the five-seed CLIP-GRU and PE-GRU video-level outputs."),
     ]
     return '<div class="model-card-grid">' + "".join(f'<article class="model-card"><div class="model-index">{idx}</div><small>{subtitle}</small><h3>{title}</h3><p>{body}</p><span>1,024-D SIGNAL</span></article>' for idx, title, subtitle, body in cards) + "</div>"
 
 
 def _benchmark_html() -> str:
-    values = [("GenD-CLIP",95.41),("GenD-PE",95.90),("Original ensemble",97.12),("CLIP-GRU-32",94.63),("PE-GRU-32",94.38),("GRU ensemble",96.40)]
-    bars = "".join(f'<div class="benchmark-row"><span>{name}</span><div><i style="width:{score}%"></i></div><strong>{score:.2f}%</strong></div>' for name, score in values)
-    return f'<section class="benchmark-card"><div class="section-heading compact"><div><span>RESEARCH CONTEXT</span><h2>Celeb-DF v2 benchmark</h2></div><p>Historical dataset-level AUROC · 518 videos · not an uploaded-video probability</p></div><div class="benchmark-bars">{bars}</div></section>'
+    bars = "".join(
+        f'<div class="benchmark-row"><span>{html.escape(spec.label)}</span><div><i style="width:{spec.benchmark_auroc*100:.2f}%"></i></div>'
+        f'<strong>AUROC {spec.benchmark_auroc:.4f}<small>AP {spec.benchmark_ap:.4f} · EER {spec.benchmark_eer*100:.1f}%</small></strong></div>'
+        for spec in MODEL_REGISTRY.values()
+    )
+    return f'<section class="benchmark-card"><div class="section-heading compact"><div><span>RESEARCH CONTEXT</span><h2>FaceForensics++ historical benchmark</h2></div><p>Dataset-level reference metrics · not live confidence · not reproduced by this upload</p></div><div class="benchmark-bars">{bars}</div></section>'
 
 
 def build_demo() -> gr.Blocks:
-    availability = MANAGER.availability()
-    selectable = [key for key in MODEL_LABELS if availability[key][0]]
-    default_model = selectable[0] if selectable else "gend_clip"
+    default_model = next(iter(MODEL_LABELS))
     with gr.Blocks(title=APP_TITLE, fill_width=True, delete_cache=(3600, 3600)) as demo:
         gr.HTML(_nav_html()); gr.HTML(_hero_html())
         with gr.Row(elem_classes=["workspace-grid"], equal_height=False):
@@ -185,11 +187,11 @@ def build_demo() -> gr.Blocks:
                 video = gr.Video(label="Drop an MP4 video here", sources=["upload"], format=None, include_audio=True, buttons=[], elem_id="video-upload", elem_classes=["video-uploader"])
                 upload_info = gr.HTML(_upload_info_html(None), elem_id="upload-info")
                 with gr.Group(elem_classes=["control-group"]):
-                    model = gr.Dropdown(choices=[(MODEL_LABELS[key], key) for key in selectable], value=default_model, label="Detection configuration", info="Only configurations with all required local weights are selectable.", interactive=bool(selectable), elem_id="model-selector")
+                    model = gr.Dropdown(choices=[(label, key) for key, label in MODEL_LABELS.items()], value=default_model, label="Detection configuration", info="All six research configurations are listed; lifecycle status appears below.", interactive=True, elem_id="model-selector")
                     with gr.Row(elem_classes=["action-row"]):
                         analyze = gr.Button("Analyze video", variant="primary", elem_id="analyze-btn", scale=3)
                         compare = gr.Button("Compare available", variant="secondary", elem_id="compare-btn", scale=2)
-                gr.HTML(_availability_html(), elem_id="availability-card")
+                availability_card = gr.HTML(_availability_html(), elem_id="availability-card")
             with gr.Column(scale=7, elem_classes=["glass-panel", "results-panel"]):
                 gr.HTML('<div class="panel-heading"><div><span>02 · OUTPUT</span><h2>Detection results</h2></div><div class="live-chip"><i></i> MODEL SIGNAL</div></div>')
                 status = gr.HTML(_status_html("Ready for a local video."), elem_id="run-status")
@@ -200,8 +202,8 @@ def build_demo() -> gr.Blocks:
         gr.HTML(_model_cards_html()); gr.HTML(_benchmark_html())
         gr.HTML('<footer class="dashboard-footer"><div><strong>GenD + GRU Deepfake Detection</strong><span>University capstone research prototype</span></div><p>Model predictions are experimental and should not be considered definitive proof of video authenticity.</p></footer>')
         video.change(fn=lambda path:_upload_info_html(path), inputs=video, outputs=upload_info, show_progress="hidden", api_visibility="private")
-        analyze.click(fn=run_selected, inputs=[video,model], outputs=[result,chart,status], concurrency_id="inference", concurrency_limit=1, scroll_to_output=True, api_visibility="private", show_progress="minimal")
-        compare.click(fn=run_comparison, inputs=[video,model], outputs=[result,chart,status], concurrency_id="inference", concurrency_limit=1, scroll_to_output=True, api_visibility="private", show_progress="minimal")
+        analyze.click(fn=run_selected, inputs=[video,model], outputs=[result,chart,status,availability_card], concurrency_id="inference", concurrency_limit=1, scroll_to_output=True, api_visibility="private", show_progress="full", show_progress_on=[result])
+        compare.click(fn=run_comparison, inputs=[video,model], outputs=[result,chart,status,availability_card], concurrency_id="inference", concurrency_limit=1, scroll_to_output=True, api_visibility="private", show_progress="full", show_progress_on=[result])
     return demo.queue(max_size=4, default_concurrency_limit=1, api_open=False)
 
 

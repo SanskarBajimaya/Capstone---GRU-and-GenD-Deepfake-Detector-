@@ -42,8 +42,8 @@ The main finding is nuanced: **GRUs perform extremely well on held-out FaceForen
 | **GenD-CLIP** | Mean of frame-level GenD-CLIP FAKE probabilities | No — released GenD weights |
 | **GenD-PE** | Mean of frame-level GenD-PE FAKE probabilities | No — released GenD weights |
 | **GenD CLIP+PE ensemble** | Average of the two released-head video probabilities | No new training; our score-level comparison |
-| **CLIP-GRU-32** | Five GRUs score CLIP frame-feature sequences; average seed probabilities | **Yes** |
-| **PE-GRU-32** | Five GRUs score PE frame-feature sequences; average seed probabilities | **Yes** |
+| **CLIP-GRU-32 (seed-probability ensemble)** | Five GRUs score CLIP frame-feature sequences; average seed probabilities | **Yes** |
+| **PE-GRU-32 (seed-probability ensemble)** | Five GRUs score PE frame-feature sequences; average seed probabilities | **Yes** |
 | **CLIP-GRU+PE-GRU ensemble** | Average of the two five-seed GRU probabilities | No additional training; our score-level ensemble |
 
 CLIP-GRU-64 was also trained and evaluated as a **controlled frame-length experiment**. It is not one of the frontend's six selectable configurations.
@@ -143,7 +143,7 @@ $env:GEN_D_PORT = "7860"
 python frontend/app.py
 ```
 
-**Using the trained GRUs:** The repository includes historical performance reports but **does not ship the full GRU model weights**. Obtain the five completed CLIP-GRU-32 and/or PE-GRU-32 checkpoints privately from the researchers, then place them at these exact local paths:
+**Using the trained GRUs:** This repository revision includes the five completed CLIP-GRU-32 and five completed PE-GRU-32 checkpoints at these exact local paths:
 
 ```text
 temporal/models/gru32_seed0_best.pt
@@ -157,7 +157,7 @@ temporal/models_pe/gru32_pe_seed1_best.pt
 temporal/models_pe/gru32_pe_seed4_best.pt
 ```
 
-The app validates checkpoint metadata against the saved split and manifest. If checkpoints are absent, GRU options remain unavailable rather than returning invented predictions. **`temporal/models/best_gru.pt` is a separate 16-frame pilot checkpoint, not a substitute for the 32-frame experiments.** Never commit checkpoints or restricted videos to GitHub.
+The app validates checkpoint metadata against the saved split and manifest, then strictly loads the state dictionaries into the trained architecture. If checkpoints are absent or incompatible, the affected GRU options remain unavailable rather than returning invented predictions. **`temporal/models/best_gru.pt` is a separate 16-frame pilot checkpoint, not a substitute for the 32-frame experiments.** Do not modify the trained checkpoints or commit restricted videos.
 
 Run the frontend tests from the repository root:
 

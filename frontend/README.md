@@ -35,7 +35,7 @@ python frontend/app.py
 
 If Python 3.13 cannot resolve a pinned PyTorch or ONNX Runtime wheel, create a Python 3.12 virtual environment rather than changing research dependency versions without validation.
 
-The root research environment pins Transformers 4.56.2, which requires `huggingface-hub < 1.0`. Gradio 6.31 requires `huggingface-hub >= 1.16`, so those exact packages cannot coexist. The isolated frontend requirements use compatible Transformers 5 while leaving all research source, preprocessing, model identifiers, and weights unchanged. The frontend loader supplies a small compatibility subclass because Transformers 5 defaults outer models to a meta device, while legacy GenD loads its backbone inside `__init__`. It also restores CLIP's standard non-persistent sequential position-ID buffer if the v5 custom-checkpoint loader leaves that buffer uninitialized; learned weights are not changed. Keep training/reproduction work in its original environment.
+The root research environment pins Transformers 4.56.2, which requires `huggingface-hub < 1.0`. Gradio 6.31 requires `huggingface-hub >= 1.16`, so those exact packages cannot coexist. The isolated frontend requirements use compatible Transformers 5 while leaving all research source, preprocessing, model identifiers, and weights unchanged. The frontend loader supplies a small compatibility subclass because Transformers 5 defaults outer models to a meta device, while legacy GenD loads its backbone inside `__init__`. It restores CLIP's standard non-persistent sequential position-ID buffer and timm EVA's deterministic non-persistent rotary-frequency bands if the v5 outer custom-checkpoint loader leaves either buffer uninitialized; learned weights are not changed. Keep training/reproduction work in its original environment.
 
 ## Models and assets
 
@@ -50,10 +50,10 @@ RetinaFace uses `weights/models/buffalo_l/det_10g.onnx`, matching the existing p
 |---|---|---|
 | GenD-CLIP | Released HF model | Mean of 32 frame-level FAKE probabilities |
 | GenD-PE | Released HF model | Mean of 32 frame-level FAKE probabilities |
-| CLIP-GRU-32 | CLIP + five CLIP GRUs | Mean across seeds 0–4 |
-| PE-GRU-32 | PE + five PE GRUs | Mean across seeds 0–4 |
-| GenD CLIP + PE ensemble | Both released models | Mean of the two video probabilities |
-| CLIP-GRU + PE-GRU ensemble | Both backbones + ten GRUs | Mean of the two five-seed probabilities |
+| GenD CLIP+PE ensemble | Both released models | Mean of the two video probabilities |
+| CLIP-GRU-32 (seed-probability ensemble) | CLIP + five CLIP GRUs | Mean across seeds 0–4 |
+| PE-GRU-32 (seed-probability ensemble) | PE + five PE GRUs | Mean across seeds 0–4 |
+| CLIP-GRU+PE-GRU ensemble | Both backbones + ten GRUs | Mean of the two five-seed probabilities |
 
 Required GRU paths:
 
@@ -62,7 +62,7 @@ temporal/models/gru32_seed0_best.pt ... gru32_seed4_best.pt
 temporal/models_pe/gru32_pe_seed0_best.pt ... gru32_pe_seed4_best.pt
 ```
 
-GRU choices are disabled unless every checkpoint for that configuration exists. Each file is safely loaded with `weights_only=True` and must match the repository manifest and split hashes, feature size 1,024, hidden size 128, one layer, 32 frames, split seed 2026, expected training seed, and `completed=True`.
+The selector always lists the exact six research configurations. The status panel separately reports checkpoint detection, successful loading, pipeline initialization, and end-to-end READY state. Each GRU file is safely loaded with `weights_only=True` and must match the repository manifest and split hashes, feature size 1,024, hidden size 128, one layer, 32 frames, split seed 2026, expected training seed, 20 epochs, learning rate 1e-3, batch size 4, and `completed=True`. PE checkpoints must also identify the PE feature model.
 
 The tracked `temporal/models/best_gru.pt` is the old 16-frame pilot and is intentionally never substituted.
 
@@ -100,7 +100,7 @@ Gradio owns the upload temporary file; cache cleanup is configured hourly. Befor
 
 ## Benchmark panel
 
-The Celeb-DF v2 AUROC panel is verified against `temporal/results_pe/final_comparison_celebdf.csv`. It is clearly historical dataset-level research context and is never combined with an uploaded-video prediction.
+The panel presents the saved six-model FaceForensics++ reference AUROC, AP, and EER values. It explicitly labels them as historical dataset-level research context, not live confidence and not a claim that the uploaded video reproduced the benchmark.
 
 ## Tests
 
@@ -108,23 +108,26 @@ The Celeb-DF v2 AUROC panel is verified against `temporal/results_pe/final_compa
 python -m unittest discover -s frontend/tests -v
 ```
 
-Lightweight tests cover request planning, genuine-result rendering, checkpoint naming/availability, bounded RetinaFace provisioning, upload rejection, and Gradio construction. Real inference additionally requires PyTorch/video dependencies, RetinaFace weights, Hugging Face cache or network access, and exact GRU checkpoints for temporal modes.
+Quick tests cover request planning, genuine-result rendering, exact registry naming, lifecycle status, strict checkpoint loading, GRU forward scoring, bounded RetinaFace provisioning, upload rejection, and Gradio construction. Raw-video inference additionally requires the visual models, RetinaFace weights, and exact GRU checkpoints.
 
-Validated in this workspace on 2026-11-03 with Python 3.13 and CPU-only PyTorch:
+Validated in this workspace on 2026-11-19 with Python 3.13 and CPU-only PyTorch:
 
-- All 11 unit tests passed; Gradio emitted non-fatal unclosed-event-loop `ResourceWarning` messages during teardown.
-- The app served successfully on `127.0.0.1:7860` and returned HTTP 200.
-- A temporary synthetic MP4 passed metadata/decoder validation, and its intentional no-face condition returned a clear error with no prediction.
-- The pinned RetinaFace ONNX model loaded with `CPUExecutionProvider`.
-- Official GenD-CLIP and GenD-PE weights loaded and completed one-frame forward smoke tests with feature shape `[1, 1024]`, logit shape `[1, 2]`, and probabilities summing to 1.
-- End-to-end prediction on a real face video was not run because no test video is included in the repository.
-- GRU-32 execution was not run because the repository does not contain the required five CLIP and five PE checkpoints.
+- All ten GRU checkpoints loaded strictly and produced finite probabilities from `[1, 32, 1024]` inputs.
+- Stored-sequence CLIP-GRU and PE-GRU probabilities reproduced the saved evaluation outputs within normal floating-point tolerance.
+- RetinaFace produced the exact saved 32 frame IDs for local real video `064.mp4`.
+- One end-to-end comparison executed all six configurations on that video in 97.1 seconds on CPU. All six lifecycle entries reached `READY` only after prediction succeeded.
+
+### PE fresh-embedding discrepancy and resolution
+
+During integration, fresh PE embeddings initially did **not** match the saved PE training artifacts: mean cosine similarity was about `0.673`, and repeated model loads produced different PE probabilities despite identical learned state dictionaries. The cause was timm EVA's rotary-frequency `rope.bands` buffer. It is intentionally non-persistent, so it is absent from the Hugging Face state dictionary; the Transformers 5 outer custom-checkpoint loader left it uninitialized. File existence and an empty missing-key report therefore did not detect the problem.
+
+The loader now calls timm's own deterministic `reset_parameters()` for that rotary object after the learned checkpoint loads. This restores the canonical frequency bands `[1.0, ..., 0.00017782794]`; it does not change any learned parameter, checkpoint, GRU output formula, class mapping, or confidence artificially. After the fix, fresh PE embeddings matched the saved artifact with mean absolute error about `1.09e-5`, mean cosine similarity `1.0`, and PE-GRU five-seed probability `0.000341819` versus saved `0.000341819` for video `064`. The corrected end-to-end FAKE probabilities were `0.127753` (GenD-CLIP), `0.140814` (GenD-PE), `0.134284` (GenD ensemble), `0.001774` (CLIP-GRU), `0.000342` (PE-GRU), and `0.001058` (GRU ensemble); all mapped to REAL for this real sample.
 
 ## Troubleshooting
 
 - **Missing PyTorch or codec:** install `frontend/requirements.txt` into the launch interpreter.
 - **Hugging Face model cannot load:** provide network access or pre-populate its cache.
-- **GRU choice absent:** provide all five exact checkpoints for that backbone, then restart.
+- **GRU status unavailable:** verify all five exact checkpoints for that backbone are present and unchanged, then restart.
 - **Not enough faces:** use a video with one clear face for at least 64 frames.
 - **CPU is slow:** configure compatible CUDA; do not reduce frame count because that changes the trained pipeline.
 - **Port occupied:** set `GEN_D_PORT` to another local port.

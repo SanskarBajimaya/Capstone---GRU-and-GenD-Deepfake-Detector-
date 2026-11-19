@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +52,13 @@ class PredictionService:
         pe = any(k in plan for k in ("gend_pe","pe_gru","head_ensemble","gru_ensemble"))
         return [key for key, needed in (("clip",clip),("pe",pe)) if needed]
 
+    @staticmethod
+    def _validated_probability(name: str, value: float) -> float:
+        value = float(value)
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            raise AnalysisError(f"{name} produced an invalid fake probability.")
+        return value
+
     def _encode(self, backbone: str, frames: list, progress: Callable[[float,str],None], base: float):
         torch = self.manager._load_torch()
         model = self.manager.get_gend(backbone)
@@ -61,20 +69,35 @@ class PredictionService:
                 current = frames[start:start+batch_size]
                 batch = torch.stack([model.feature_extractor.preprocess(frame) for frame in current]).to(self.manager.device)
                 encoded = model.feature_extractor(batch)
+                current_logits = model.model.forward(encoded)
+                if tuple(encoded.shape) != (len(current), 1024):
+                    raise AnalysisError(f"{backbone.upper()} encoder returned {tuple(encoded.shape)}; expected ({len(current)}, 1024).")
+                if tuple(current_logits.shape) != (len(current), 2):
+                    raise AnalysisError(f"{backbone.upper()} head returned {tuple(current_logits.shape)}; expected ({len(current)}, 2).")
+                if not torch.isfinite(encoded).all() or not torch.isfinite(current_logits).all():
+                    raise AnalysisError(f"{backbone.upper()} produced non-finite features or logits.")
                 features.append(encoded.float().cpu())
-                logits.append(model.model.forward(encoded).float().cpu())
+                logits.append(current_logits.float().cpu())
                 progress(base + .20*min((start+len(current))/len(frames),1), f"Encoding {backbone.upper()} faces")
-        return torch.cat(features), torch.cat(logits)
+        encoded, scored = torch.cat(features), torch.cat(logits)
+        if tuple(encoded.shape) != (32, 1024) or tuple(scored.shape) != (32, 2):
+            raise AnalysisError(f"{backbone.upper()} pipeline requires exactly 32 frame features.")
+        return encoded, scored
 
     def _gru_probability(self, backbone: str, features, progress: Callable[[float,str],None], stage: float) -> float:
         torch = self.manager._load_torch()
         values = []
+        if tuple(features.shape) != (32, 1024):
+            raise AnalysisError(f"{backbone.upper()} GRU requires a 32 × 1024 feature sequence.")
         with torch.inference_mode():
             sequence = features.unsqueeze(0).to(self.manager.device)
             for index, model in enumerate(self.manager.get_grus(backbone),1):
-                values.append(float(model(sequence).sigmoid().item()))
+                output = model(sequence)
+                if output.numel() != 1:
+                    raise AnalysisError(f"{backbone.upper()} GRU seed {index} returned an invalid output shape.")
+                values.append(self._validated_probability(f"{backbone.upper()} GRU seed {index}", output.sigmoid().item()))
                 progress(stage+index*.01, f"Scoring {backbone.upper()} GRU seed {index}/5")
-        return sum(values)/len(values)
+        return self._validated_probability(f"{backbone.upper()} five-seed ensemble", sum(values)/len(values))
 
     def _run_models(self, frames: list, plan: list[str], progress: Callable[[float,str],None]) -> dict[str,float]:
         torch = self.manager._load_torch()
@@ -82,14 +105,22 @@ class PredictionService:
         for index, backbone in enumerate(self._required_backbones(plan)):
             base = .42 + index*.24
             features, logits = self._encode(backbone,frames,progress,base)
-            values[f"gend_{backbone}"] = float(logits.softmax(dim=-1)[:,1].mean().item())
+            values[f"gend_{backbone}"] = self._validated_probability(
+                f"GenD-{backbone.upper()}", logits.softmax(dim=-1)[:,1].mean().item()
+            )
             if f"{backbone}_gru" in plan or "gru_ensemble" in plan:
                 values[f"{backbone}_gru"] = self._gru_probability(backbone,features,progress,base+.20)
             del features, logits
             self.manager.release_encoder()
             if torch.cuda.is_available(): torch.cuda.empty_cache()
-        if "head_ensemble" in plan: values["head_ensemble"] = (values["gend_clip"]+values["gend_pe"])/2
-        if "gru_ensemble" in plan: values["gru_ensemble"] = (values["clip_gru"]+values["pe_gru"])/2
+        if "head_ensemble" in plan:
+            values["head_ensemble"] = self._validated_probability(
+                "GenD CLIP+PE ensemble", (values["gend_clip"]+values["gend_pe"])/2
+            )
+        if "gru_ensemble" in plan:
+            values["gru_ensemble"] = self._validated_probability(
+                "CLIP-GRU+PE-GRU ensemble", (values["clip_gru"]+values["pe_gru"])/2
+            )
         return values
 
     @staticmethod
@@ -103,7 +134,7 @@ class PredictionService:
         try:
             progress(.12,"Loading RetinaFace")
             detector = self.manager.get_face_detector()
-            progress(.18,"Sampling 64 valid face frames")
+            progress(.18,"Sampling the trained 32-frame sequence from 64 valid faces")
             frames, ids = extract_research_frames(Path(video_path),detector)
             progress(.40,"Face sequence aligned chronologically")
             try: values = self._run_models(frames,plan,progress)
@@ -113,11 +144,17 @@ class PredictionService:
                 self.manager.fallback_to_cpu()
                 values = self._run_models(frames,plan,progress)
         except FaceExtractionError as exc: raise AnalysisError(str(exc)) from exc
-        except (RuntimeDependencyError,MissingCheckpointError,InvalidCheckpointError) as exc: raise AnalysisError(str(exc)) from exc
+        except (RuntimeDependencyError,MissingCheckpointError,InvalidCheckpointError) as exc:
+            self.manager.mark_inference_failed(plan, exc)
+            raise AnalysisError(str(exc)) from exc
         except Exception as exc:
+            self.manager.mark_inference_failed(plan, exc)
             if self._is_cuda_oom(exc): raise AnalysisError("Inference exceeded available GPU and CPU memory.") from exc
             raise
+        self.manager.mark_inference_succeeded(values)
         ordered = tuple(Prediction(key,MODEL_LABELS[key],values[key]) for key in plan if key in values)
+        if not ordered or not any(item.key == selected_model for item in ordered):
+            raise AnalysisError("The selected inference pipeline did not produce a result.")
         selected = next((item for item in ordered if item.key == selected_model),ordered[0])
         notes = [
             "Positive class is FAKE; 50% is the display decision threshold, not a calibrated guarantee.",
@@ -126,9 +163,9 @@ class PredictionService:
             "Uploads and predictions are not persisted by the frontend.",
         ]
         if len(plan)<len(MODEL_LABELS) and compare_all:
-            notes.append("Unavailable GRU configurations were omitted because their five-seed checkpoints are incomplete.")
-        report = AnalysisReport(selected,ordered,time.perf_counter()-started,32,str(self.manager.device).upper(),tuple(notes))
-        self.repository.save({"filename":metadata.safe_name,"model":selected.key,"fake_probability":selected.fake_probability,"frames_used":32,"processing_seconds":report.processing_seconds})
+            notes.append("Configurations with incomplete prerequisites were omitted from this comparison.")
+        report = AnalysisReport(selected,ordered,time.perf_counter()-started,len(ids),str(self.manager.device).upper(),tuple(notes))
+        self.repository.save({"filename":metadata.safe_name,"model":selected.key,"fake_probability":selected.fake_probability,"frames_used":len(ids),"processing_seconds":report.processing_seconds})
         progress(.99,"Preparing analytical report")
         return report
 

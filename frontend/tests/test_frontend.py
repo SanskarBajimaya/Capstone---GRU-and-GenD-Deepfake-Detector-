@@ -79,6 +79,39 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual([p.name for p in self.manager.checkpoint_paths("clip")],[f"gru32_seed{i}_best.pt" for i in range(5)])
         self.assertEqual([p.name for p in self.manager.checkpoint_paths("pe")],[f"gru32_pe_seed{i}_best.pt" for i in range(5)])
 
+    def test_registry_has_exact_six_names_in_required_order(self):
+        self.assertEqual(list(MODEL_LABELS.values()), [
+            "GenD-CLIP",
+            "GenD-PE",
+            "GenD CLIP+PE ensemble",
+            "CLIP-GRU-32 (seed-probability ensemble)",
+            "PE-GRU-32 (seed-probability ensemble)",
+            "CLIP-GRU+PE-GRU ensemble",
+        ])
+
+    def test_checkpoint_detection_is_not_reported_as_ready(self):
+        status=self.manager.model_statuses()["clip_gru"]
+        self.assertEqual((status.checkpoints_detected,status.checkpoints_expected),(5,5))
+        self.assertEqual(status.phase,"DETECTED")
+        self.assertFalse(status.checkpoints_loaded)
+        self.assertFalse(status.inference_tested)
+
+    def test_all_ten_gru_checkpoints_strictly_load_and_score(self):
+        import torch
+        sequence=torch.zeros(1,32,1024,device=self.manager.device)
+        with torch.inference_mode():
+            for backbone in ("clip","pe"):
+                models=self.manager.get_grus(backbone)
+                self.assertEqual(len(models),5)
+                for model in models:
+                    probability=model(sequence).sigmoid()
+                    self.assertEqual(tuple(probability.shape),(1,))
+                    self.assertTrue(torch.isfinite(probability).all())
+                    self.assertTrue(0 <= probability.item() <= 1)
+        statuses=self.manager.model_statuses()
+        self.assertEqual(statuses["clip_gru"].phase,"LOADED")
+        self.assertEqual(statuses["pe_gru"].phase,"LOADED")
+
     def test_face_detector_download_is_size_bounded(self):
         class OversizedResponse:
             headers = {"Content-Length": str(MAX_RETINAFACE_BYTES + 1)}
@@ -110,6 +143,11 @@ class UiTests(unittest.TestCase):
         component=next(item for item in app.demo.config["components"] if item["type"]=="video")
         self.assertTrue(component["props"]["include_audio"])
         self.assertNotIn("format",component["props"])
+
+    def test_selector_lists_exactly_all_six_models(self):
+        import app
+        component=next(item for item in app.demo.config["components"] if item["type"]=="dropdown")
+        self.assertEqual(component["props"]["choices"], [(label,key) for key,label in MODEL_LABELS.items()])
 
 
 if __name__ == "__main__": unittest.main()
