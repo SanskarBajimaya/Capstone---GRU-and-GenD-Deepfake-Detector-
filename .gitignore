@@ -14,11 +14,11 @@ y.py
 z.py
 
 # Raw data and generated temporal artifacts (already tracked files are unaffected)
-/data/
-/temporal/features_64/
-/temporal/models/
+# /data/
+# /temporal/features_64/
+# /temporal/models
 *.pt.tmp
-/temporal/features_pe/
-/temporal/models_pe/
-/temporal/features_pe32/
+# /temporal/features_pe/
+# /temporal/models_pe/
+# /temporal/features_pe32/
 /temporal/results_pe/*.pt
