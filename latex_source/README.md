@@ -8,4 +8,3 @@ Compile with `pdflatex main.tex`, `bibtex main`, `pdflatex main.tex`, and `pdfla
 
 The root `scripts/generate_report_figures.py` creates all graphics from package-level `data/*.csv` and does not train any models. Upload the root `scripts/` directory as the assignment requires, together with `latex_source/` and only the permitted derived data.
 
-[NEEDS INPUT] Verify exact local OS build, required additional recent related-work papers, and finalize Appendix A screenshot. Avoid claiming the source has already been committed to GitHub.
